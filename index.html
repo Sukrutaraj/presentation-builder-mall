@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Digital Aktivitetsval</title>
+<style>
+body{font-family:sans-serif;background:#f5f5f5;text-align:center;padding:20px;max-width:900px;margin:auto;}
+.section{background:white;padding:12px;margin:10px auto;border-radius:12px;}
+input[type="text"]{width:90%;padding:8px;margin:6px;border-radius:8px;border:1px solid #ddd;font-size:15px;}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px;margin-top:10px;}
+.slot{background:#fafafa;border:1px solid #eee;border-radius:10px;padding:10px;text-align:left;}
+.slot-label{font-weight:bold;font-size:13px;margin-bottom:6px;color:#555;}
+.slot img{width:100%;max-height:100px;object-fit:contain;border-radius:8px;margin-top:6px;display:block;}
+.slot-input-label{font-size:12px;color:#888;margin-top:8px;display:block;}
+.slot input[type="file"]{width:100%;font-size:12px;margin-top:2px;}
+.slot input[type="text"]{width:100%;padding:5px 8px;font-size:13px;margin:4px 0 0 0;border-radius:6px;border:1px solid #ddd;}
+.smallBtn{background:#eee;padding:6px 10px;border-radius:6px;cursor:pointer;margin:3px;border:none;font-size:13px;}
+.smallBtn:active{transform:scale(0.95);}
+.rec-active{background:#ffcccc!important;}
+.audio-ok{color:#4CAF50;font-size:11px;display:block;margin-top:4px;}
+.audio-no{color:#999;font-size:11px;display:block;margin-top:4px;}
+.tool-row{display:flex;justify-content:center;gap:25px;margin-top:15px;flex-wrap:wrap;}
+.tool-btn{display:flex;flex-direction:column;align-items:center;cursor:pointer;}
+.tool-btn .icon{width:70px;height:70px;border-radius:50%;display:flex;align-items:center;justify-content:center;border:2px solid #333;font-size:26px;background:white;}
+.tool-btn .label{margin-top:6px;font-size:13px;}
+button,.smallBtn{transition:all 0.1s ease;}
+button:active{transform:scale(0.95);}
+.tool-btn:active .icon{transform:scale(0.92);background:#eee;}
+#add-slot-btn{margin-top:10px;padding:8px 18px;background:#eee;border:none;border-radius:8px;cursor:pointer;font-size:14px;}
+#preview{display:none;text-align:left;}
+.preview-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:10px;}
+.preview-cell{background:white;border-radius:10px;padding:10px;text-align:center;border:1px solid #eee;}
+.preview-cell img{width:100%;max-height:90px;object-fit:contain;border-radius:8px;}
+.preview-cell p{margin-top:6px;font-size:13px;color:#333;}
+.play-btn{display:block;width:100%;margin-top:6px;padding:8px;background:#4CAF50;color:white;border:none;border-radius:50px;font-size:15px;cursor:pointer;}
+.play-btn:active{background:#388E3C;transform:scale(0.96);}
+</style>
+</head>
+<body>
+
+<h2>Digital Aktivitetsval</h2>
+
+<div class="section">
+  <input id="title" type="text" placeholder="Titel, t.ex. Morgonval">
+</div>
+
+<div class="section">
+  <div class="grid" id="slots"></div>
+  <button id="add-slot-btn" onclick="addSlot()">➕ Lägg till ruta</button>
+</div>
+
+<div class="tool-row">
+  <div class="tool-btn" onclick="exportJSON()">
+    <div class="icon">⬇️</div>
+    <div class="label">Ladda ner JSON</div>
+  </div>
+  <div class="tool-btn" onclick="importJSON()">
+    <div class="icon">⬆️</div>
+    <div class="label">Ladda upp JSON</div>
+  </div>
+  <div class="tool-btn" onclick="createLink()">
+    <div class="icon">🔗</div>
+    <div class="label">Skapa länk</div>
+  </div>
+</div>
+
+<br>
+<button onclick="generatePreview()">▶️ Förhandsgranska</button>
+
+<div id="preview" class="section">
+  <h3 id="preview-title"></h3>
+  <div class="preview-grid" id="preview-grid"></div>
+</div>
+
+<script>
+var slots        = [];
+var mediaRecorder = null;
+var audioChunks   = [];
+var recordingIdx  = null;
+var currentAudio  = null;
+
+/* ── MIME DETECTION ── */
+function getBestMime() {
+  if (typeof MediaRecorder === "undefined") return "";
+  var list = ["audio/webm;codecs=opus","audio/webm","audio/mp4","audio/ogg;codecs=opus","audio/ogg"];
+  for (var i=0;i<list.length;i++){
+    try{ if(MediaRecorder.isTypeSupported(list[i])) return list[i]; }catch(e){}
+  }
+  return "";
+}
+
+function getExt(mime) {
+  if (!mime) return "webm";
+  if (mime.indexOf("mp4")>-1)  return "m4a";
+  if (mime.indexOf("ogg")>-1)  return "ogg";
+  return "webm";
+}
+
+/* ── PLAY ── */
+function playDataUrl(dataUrl) {
+  if (!dataUrl) return;
+  try {
+    if (currentAudio) { currentAudio.pause(); currentAudio.currentTime=0; }
+    currentAudio = new Audio(dataUrl);
+    var p = currentAudio.play();
+    if (p && p.catch) p.catch(function(e){ alert("Kunde inte spela upp.\n"+e.message); });
+  } catch(e) { alert("Ljud stöds ej: "+e.message); }
+}
+
+/* ── RECORD ── */
+function toggleRecording(i) {
+  if (mediaRecorder && mediaRecorder.state==="recording") {
+    stopRecording();
+  } else {
+    startRecording(i);
+  }
+}
+
+function startRecording(i) {
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    alert("Mikrofoninspelning stöds inte på denna enhet/webbläsare.");
+    return;
+  }
+  navigator.mediaDevices.getUserMedia({audio:true,video:false})
+  .then(function(stream){
+    audioChunks = [];
+    recordingIdx = i;
+    var mime = getBestMime();
+    try {
+      mediaRecorder = mime ? new MediaRecorder(stream,{mimeType:mime}) : new MediaRecorder(stream);
+    } catch(e) {
+      mediaRecorder = new MediaRecorder(stream);
+    }
+    mediaRecorder.ondataavailable = function(e){
+      if(e.data && e.data.size>0) audioChunks.push(e.data);
+    };
+    mediaRecorder.onstop = function(){
+      var usedMime = mediaRecorder.mimeType || mime || "audio/webm";
+      var blob = new Blob(audioChunks,{type:usedMime});
+      var reader = new FileReader();
+      reader.onload = function(){
+        slots[i].audio    = reader.result;
+        slots[i].audioExt = getExt(usedMime);
+        render();
+      };
+      reader.readAsDataURL(blob);
+      stream.getTracks().forEach(function(t){t.stop();});
+    };
+    mediaRecorder.start(100);
+    var btn = document.getElementById("rec-btn-"+i);
+    if(btn){ btn.textContent="⏹ Stoppa"; btn.classList.add("rec-active"); }
+    setTimeout(function(){
+      if(mediaRecorder && mediaRecorder.state==="recording") stopRecording();
+    },15000);
+  })
+  .catch(function(err){
+    if(err.name==="NotAllowedError"){
+      alert("Mikrofonåtkomst nekades. Tillåt mikrofon i webbläsarens inställningar.");
+    } else {
+      alert("Fel: "+err.message);
+    }
+  });
+}
+
+function stopRecording() {
+  if(mediaRecorder && mediaRecorder.state==="recording") mediaRecorder.stop();
+  var btn = document.getElementById("rec-btn-"+recordingIdx);
+  if(btn){ btn.textContent="🎤 Spela in"; btn.classList.remove("rec-active"); }
+}
+
+/* ── RENDER ── */
+function render() {
+  var container = document.getElementById("slots");
+  container.innerHTML = "";
+  slots.forEach(function(slot,i){
+    var div = document.createElement("div");
+    div.className = "slot";
+    var html = '<div class="slot-label">Ruta '+(i+1)+'</div>';
+    html += '<span class="slot-input-label">📷 Bild</span>';
+    html += '<input type="file" accept="image/*" onchange="loadImage(event,'+i+')">';
+    if(slot.img) html += '<img src="'+slot.img+'" alt="'+slot.alt+'">';
+    html += '<span class="slot-input-label">🎙 Ljud</span>';
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;">';
+    html += '<button class="smallBtn" id="rec-btn-'+i+'" onclick="toggleRecording('+i+')">🎤 Spela in</button>';
+    if(slot.audio){
+      html += '<button class="smallBtn" onclick="playDataUrl(slots['+i+'].audio)">▶️ Lyssna</button>';
+      html += '<button class="smallBtn" style="color:#c00" onclick="slots['+i+'].audio=\'\';slots['+i+'].audioExt=\'\';render()">🗑</button>';
+    } else {
+      html += '<button class="smallBtn" disabled style="opacity:0.4">▶️ Lyssna</button>';
+    }
+    html += '</div>';
+    html += slot.audio
+      ? '<span class="audio-ok">✔ Ljud inspelat</span>'
+      : '<span class="audio-no">Inget ljud</span>';
+    html += '<span class="slot-input-label">📝 Beskrivning</span>';
+    html += '<input type="text" value="'+slot.alt+'" placeholder="t.ex. Laga kaffe" oninput="slots['+i+'].alt=this.value">';
+    html += '<div style="margin-top:8px;text-align:right">';
+    html += '<button class="smallBtn" onclick="moveUp('+i+')">🔼</button>';
+    html += '<button class="smallBtn" onclick="moveDown('+i+')">🔽</button>';
+    html += '<button class="smallBtn" onclick="removeSlot('+i+')">🗑</button>';
+    html += '</div>';
+    div.innerHTML = html;
+    container.appendChild(div);
+  });
+}
+
+/* ── SLOTS ── */
+function addSlot()   { slots.push({alt:"",img:"",audio:"",audioExt:""}); render(); }
+function removeSlot(i){ slots.splice(i,1); render(); }
+function moveUp(i)   { if(i===0)return; var t=slots[i];slots[i]=slots[i-1];slots[i-1]=t; render(); }
+function moveDown(i) { if(i===slots.length-1)return; var t=slots[i];slots[i]=slots[i+1];slots[i+1]=t; render(); }
+
+/* ── IMAGE ── */
+function loadImage(e,i) {
+  var file = e.target.files[0]; if(!file)return;
+  var img = new Image();
+  var reader = new FileReader();
+  reader.onload = function(ev){
+    img.onload = function(){
+      var canvas = document.createElement("canvas");
+      var maxW=600, w=img.width, h=img.height;
+      if(w>maxW){h=h*maxW/w;w=maxW;}
+      canvas.width=w; canvas.height=h;
+      canvas.getContext("2d").drawImage(img,0,0,w,h);
+      canvas.toBlob(function(blob){
+        var r2=new FileReader();
+        r2.onload=function(){ slots[i].img=r2.result; render(); };
+        r2.readAsDataURL(blob);
+      },"image/jpeg",0.7);
+    };
+    img.src=ev.target.result;
+  };
+  reader.readAsDataURL(file);
+}
+
+/* ── PREVIEW ── */
+function generatePreview() {
+  var title = document.getElementById("title").value.trim()||"Aktivitetsval";
+  document.getElementById("preview-title").textContent = title;
+  var grid = document.getElementById("preview-grid");
+  grid.innerHTML = "";
+  slots.forEach(function(slot,i){
+    if(!slot.img&&!slot.alt)return;
+    var cell = document.createElement("div");
+    cell.className = "preview-cell";
+    var html = "";
+    if(slot.img) html += '<img src="'+slot.img+'" alt="'+slot.alt+'">';
+    html += '<p>'+(slot.alt||"")+'</p>';
+    if(slot.audio) html += '<button class="play-btn" onclick="playDataUrl(slots['+i+'].audio)">🔊 Spela</button>';
+    cell.innerHTML = html;
+    grid.appendChild(cell);
+  });
+  document.getElementById("preview").style.display="block";
+}
+
+/* ── JSON ── */
+function exportJSON() {
+  var data = {title:document.getElementById("title").value.trim(),slots:slots};
+  var blob = new Blob([JSON.stringify(data,null,2)],{type:"application/json"});
+  var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="aktivitetsval.json"; a.click();
+}
+
+function importJSON() {
+  var input=document.createElement("input"); input.type="file"; input.accept="application/json";
+  input.onchange=function(e){
+    var r=new FileReader();
+    r.onload=function(){
+      try{
+        var data=JSON.parse(r.result);
+        document.getElementById("title").value=data.title||"";
+        slots=(data.slots||[]).map(function(s){return{alt:s.alt||"",img:s.img||"",audio:s.audio||"",audioExt:s.audioExt||""};});
+        render(); alert("Aktivitetsval laddat!");
+      }catch(e){alert("Ogiltig fil");}
+    };
+    r.readAsText(e.target.files[0]);
+  };
+  input.click();
+}
+
+/* ── UPLOAD VIA VERCEL ── */
+async function uploadFile(path, content, repo) {
+  var res = await fetch("https://upload-api-kappa.vercel.app/api/upload",{
+    method:"POST",
+    headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({path:path,content:content,repo:repo})
+  });
+  var data = await res.json();
+  if(!data.ok) throw new Error(data.error||"Upload failed");
+  return data;
+}
+
+/* ── SKAPA LÄNK ── */
+async function createLink() {
+  var title = document.getElementById("title").value.trim()||"Aktivitetsval";
+  var filled = slots.filter(function(s){return s.img||s.alt;});
+  if(filled.length===0){ alert("Lägg till minst en ruta med bild eller beskrivning."); return; }
+
+  var id   = Date.now();
+  var base = "aktivitetsval-"+id;
+  var repo = "Sukrutaraj/digital-aktivitets-val";
+  var uploadedSlots = [];
+
+  try {
+    for(var i=0;i<slots.length;i++){
+      var s=slots[i];
+      if(!s.img&&!s.alt) continue;
+      var imgUrl="", audioUrl="";
+
+      if(s.img){
+        var imgName=base+"-img-"+i+".jpg";
+        await uploadFile(imgName, s.img.split(",")[1], repo);
+        await new Promise(function(r){setTimeout(r,300);});
+        imgUrl="https://sukrutaraj.github.io/digital-aktivitets-val/"+imgName;
+      }
+
+      if(s.audio){
+        var ext = s.audioExt || getExt((s.audio.split(";")[0]||"").replace("data:audio/",""));
+        var audioName=base+"-audio-"+i+"."+ext;
+        await uploadFile(audioName, s.audio.split(",")[1], repo);
+        await new Promise(function(r){setTimeout(r,300);});
+        audioUrl="https://sukrutaraj.github.io/digital-aktivitets-val/"+audioName;
+      }
+
+      uploadedSlots.push({alt:s.alt,imgUrl:imgUrl,audioUrl:audioUrl});
+    }
+
+    var safeTitle = title.replace(/</g,"&lt;").replace(/>/g,"&gt;");
+    var slotsJson = JSON.stringify(uploadedSlots);
+
+    var css = [
+      "body{font-family:sans-serif;background:#1a1a2e;margin:0;padding:0;height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;overflow:hidden;}",
+      ".slide{display:none;flex-direction:column;align-items:center;justify-content:center;width:100%;max-width:700px;padding:20px;text-align:center;}",
+      ".slide.active{display:flex;}",
+      ".slide img{max-width:90vw;max-height:55vh;object-fit:contain;border-radius:16px;box-shadow:0 8px 32px rgba(0,0,0,0.4);}",
+      ".slide-label{font-size:clamp(20px,4vw,36px);font-weight:700;color:#fff;margin-top:16px;text-shadow:0 2px 8px rgba(0,0,0,0.4);}",
+      ".play-btn{margin-top:16px;padding:14px 32px;background:#4CAF50;color:white;border:none;border-radius:50px;font-size:clamp(16px,2.5vw,22px);cursor:pointer;box-shadow:0 4px 12px rgba(76,175,80,0.4);}",
+      ".play-btn:active{background:#388E3C;transform:scale(0.96);}",
+      ".nav{position:fixed;bottom:32px;left:0;right:0;display:flex;align-items:center;justify-content:center;gap:20px;}",
+      ".nav-btn{width:56px;height:56px;border-radius:50%;border:2px solid rgba(255,255,255,0.3);background:rgba(255,255,255,0.1);color:white;font-size:24px;cursor:pointer;display:flex;align-items:center;justify-content:center;transition:background 0.15s;}",
+      ".nav-btn:hover{background:rgba(255,255,255,0.2);}",
+      ".nav-btn:active{transform:scale(0.92);}",
+      ".nav-btn:disabled{opacity:0.25;cursor:default;}",
+      ".counter{color:rgba(255,255,255,0.6);font-size:14px;font-family:monospace;min-width:48px;text-align:center;}",
+      ".progress{position:fixed;top:0;left:0;height:4px;background:#4CAF50;transition:width 0.3s ease;}"
+    ].join("\n");
+
+    var scriptCode = [
+      "var slots=JSON.parse(document.getElementById('slot-data').textContent);",
+      "var cur=0;",
+      "var currentAudio=null;",
+      "",
+      "function play(url){",
+      "  if(currentAudio){currentAudio.pause();currentAudio.currentTime=0;}",
+      "  currentAudio=new Audio(url);",
+      "  var p=currentAudio.play();",
+      "  if(p&&p.catch)p.catch(function(e){console.log('Audio:',e);});",
+      "}",
+      "",
+      "function showSlide(n){",
+      "  var slides=document.querySelectorAll('.slide');",
+      "  if(n<0||n>=slides.length)return;",
+      "  slides.forEach(function(s){s.classList.remove('active');});",
+      "  slides[n].classList.add('active');",
+      "  cur=n;",
+      "  document.getElementById('prev-btn').disabled=(cur===0);",
+      "  document.getElementById('next-btn').disabled=(cur===slides.length-1);",
+      "  document.getElementById('counter').textContent=(cur+1)+' / '+slides.length;",
+      "  var pct=Math.round(((cur+1)/slides.length)*100);",
+      "  document.getElementById('progress').style.width=pct+'%';",
+      "  if(currentAudio){currentAudio.pause();currentAudio.currentTime=0;}",
+      "}",
+      "",
+      "function render(){",
+      "  var container=document.getElementById('slides');",
+      "  container.innerHTML='';",
+      "  slots.forEach(function(s,i){",
+      "    var slide=document.createElement('div');",
+      "    slide.className='slide'+(i===0?' active':'');",
+      "    if(s.imgUrl){",
+      "      var img=document.createElement('img');",
+      "      img.src=s.imgUrl;img.alt=s.alt||'';",
+      "      slide.appendChild(img);",
+      "    }",
+      "    if(s.alt){",
+      "      var lbl=document.createElement('div');",
+      "      lbl.className='slide-label';",
+      "      lbl.textContent=s.alt;",
+      "      slide.appendChild(lbl);",
+      "    }",
+      "    if(s.audioUrl){",
+      "      var btn=document.createElement('button');",
+      "      btn.className='play-btn';",
+      "      btn.textContent='\ud83d\udd0a Spela ljud';",
+      "      (function(url){btn.onclick=function(){play(url);};})(s.audioUrl);",
+      "      slide.appendChild(btn);",
+      "    }",
+      "    container.appendChild(slide);",
+      "  });",
+      "  showSlide(0);",
+      "}",
+      "",
+      "document.getElementById('prev-btn').addEventListener('click',function(){showSlide(cur-1);});",
+      "document.getElementById('next-btn').addEventListener('click',function(){showSlide(cur+1);});",
+      "",
+      "document.addEventListener('keydown',function(e){",
+      "  if(e.key==='ArrowRight'||e.key===' '){e.preventDefault();showSlide(cur+1);}",
+      "  if(e.key==='ArrowLeft'){e.preventDefault();showSlide(cur-1);}",
+      "});",
+      "",
+      "var tx=0;",
+      "document.addEventListener('touchstart',function(e){tx=e.touches[0].clientX;},{passive:true});",
+      "document.addEventListener('touchend',function(e){",
+      "  var dx=e.changedTouches[0].clientX-tx;",
+      "  if(Math.abs(dx)>50)showSlide(dx<0?cur+1:cur-1);",
+      "},{passive:true});",
+      "",
+      "render();"
+    ].join("\n");
+
+    var sharedHtml = [
+      "<!DOCTYPE html>",
+      "<html lang='sv'>",
+      "<head>",
+      "<meta charset='UTF-8'>",
+      "<meta name='viewport' content='width=device-width,initial-scale=1.0,user-scalable=no'>",
+      "<title>"+safeTitle+"</title>",
+      "<style>",css,"</style>",
+      "</head>",
+      "<body>",
+      "<div class='progress' id='progress' style='width:0%'></div>",
+      "<script type='application/json' id='slot-data'>"+slotsJson+"<"+"/script>",
+      "<div id='slides'></div>",
+      "<nav class='nav'>",
+      "  <button class='nav-btn' id='prev-btn' disabled>&#8592;</button>",
+      "  <span class='counter' id='counter'>1 / 1</span>",
+      "  <button class='nav-btn' id='next-btn'>&#8594;</button>",
+      "</nav>",
+      "<script>",scriptCode,"<"+"/script>",
+      "</body>",
+      "</html>"
+    ].join("\n");
+
+    await uploadFile(base+".html", btoa(unescape(encodeURIComponent(sharedHtml))), repo);
+
+    var url="https://sukrutaraj.github.io/digital-aktivitets-val/"+base+".html";
+    var copied=false;
+    try{ await navigator.clipboard.writeText(url); copied=true; }catch(e){}
+
+    alert("Länk skapad!\n\n"+url+"\n\n"+(copied?"✔ Kopierad":"⚠️ Kopiera manuellt")+"\n\nVänta 15–20 sek.");
+    setTimeout(function(){window.open(url,"_blank");},15000);
+
+  }catch(err){
+    alert("Fel: "+err.message);
+  }
+}
+
+/* ── INIT ── */
+for(var i=0;i<8;i++) slots.push({alt:"",img:"",audio:"",audioExt:""});
+render();
+</script>
+</body>
+</html>
