@@ -31,6 +31,23 @@ button:active{transform:scale(0.95);}
 #preview{display:none;text-align:left;}
 .play-btn{display:block;width:100%;margin-top:6px;padding:8px;background:#4CAF50;color:white;border:none;border-radius:50px;font-size:15px;cursor:pointer;}
 .play-btn:active{background:#388E3C;transform:scale(0.96);}
+
+/* QR modal */
+#qr-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.6);z-index:9999;align-items:center;justify-content:center;}
+#qr-modal.on{display:flex;}
+.qr-box{background:#fff;border-radius:20px;padding:28px 24px;text-align:center;max-width:320px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,0.2);}
+.qr-heading{font-size:16px;font-weight:700;color:#333;margin-bottom:4px;}
+.qr-url{font-size:11px;color:#999;margin-bottom:14px;word-break:break-all;}
+#qr-canvas{border-radius:8px;margin-bottom:14px;}
+.qr-dl{padding:10px 22px;background:#4CAF50;color:#fff;border:none;border-radius:50px;font-size:14px;font-weight:700;cursor:pointer;margin:4px;}
+.qr-cl{padding:10px 22px;background:#eee;color:#333;border:none;border-radius:50px;font-size:14px;cursor:pointer;margin:4px;}
+
+/* Spinner */
+#link-spinner{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:9998;align-items:center;justify-content:center;}
+#link-spinner.on{display:flex;}
+.sp-ring{width:54px;height:54px;border:6px solid rgba(255,255,255,0.2);border-top:6px solid #c87941;border-radius:50%;animation:sp-spin 0.75s linear infinite;}
+@keyframes sp-spin{to{transform:rotate(360deg);}}
+
 </style>
 </head>
 <body>
@@ -250,6 +267,8 @@ async function createLink(){
   var title=document.getElementById("title").value.trim()||"Presentation";
   var filled=slots.filter(function(s){return s.img||s.alt;});
   if(filled.length===0){alert("Lägg till minst en bild.");return;}
+
+  document.getElementById('link-spinner').classList.add('on');
   var id=Date.now(),base="presentation-"+id,repo="Sukrutaraj/digital-aktivitets-val";
   var uploadedSlots=[];
   try{
@@ -369,12 +388,81 @@ async function createLink(){
     var url="https://sukrutaraj.github.io/digital-aktivitets-val/"+base+".html";
     var copied=false;
     try{await navigator.clipboard.writeText(url);copied=true;}catch(e){}
-    alert("Länk skapad!\n\n"+url+"\n\n"+(copied?"✔ Kopierad":"⚠️ Kopiera manuellt")+"\n\nVänta 15–20 sek.");
-    setTimeout(function(){window.open(url,"_blank");},15000);
+    document.getElementById('link-spinner').classList.remove('on');
+    document.getElementById('qr-copied').textContent = copied ? '✔ Länken är kopierad till urklipp' : '⚠️ Kopiera länken manuellt';
+    document.getElementById('qr-copied').style.color = copied ? '#4CAF50' : '#e67e22';
+    showQR(url, title || 'Presentation');
   }catch(err){alert("Fel: "+err.message);}
 }
 for(var i=0;i<3;i++)slots.push({alt:"",img:"",audio:"",audioExt:""});
 render();
+
+/* ===== QR KOD ===== */
+function showQR(url, title) {
+  document.getElementById('qr-h').textContent = title || 'QR-kod';
+  document.getElementById('qr-u').textContent = url;
+  document.getElementById('qr-modal').classList.add('on');
+  var canvas = document.getElementById('qr-canvas');
+  var ctx = canvas.getContext('2d');
+  ctx.clearRect(0,0,200,200);
+  function doQR() {
+    var div = document.createElement('div');
+    new QRCode(div, {text:url,width:200,height:200,colorDark:'#000',colorLight:'#fff',correctLevel:QRCode.CorrectLevel.M});
+    setTimeout(function(){
+      var el = div.querySelector('canvas') || div.querySelector('img');
+      if(!el) return;
+      if(el.tagName==='CANVAS'){ ctx.drawImage(el,0,0,200,200); }
+      else { var i=new Image(); i.onload=function(){ctx.drawImage(i,0,0,200,200);}; i.src=el.src; }
+    }, 400);
+  }
+  if(typeof QRCode==='undefined'){
+    var s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js';
+    s.onload=doQR; document.head.appendChild(s);
+  } else { doQR(); }
+}
+
+function dlQRpdf() {
+  var title = document.getElementById('qr-h').textContent;
+  var url   = document.getElementById('qr-u').textContent;
+  var canvas = document.getElementById('qr-canvas');
+  function build(Lib) {
+    var doc = new Lib({orientation:'portrait',unit:'mm',format:'a4'});
+    var W = doc.internal.pageSize.getWidth();
+    doc.setFontSize(22); doc.setFont('helvetica','bold');
+    doc.text(title, W/2, 30, {align:'center'});
+    var sz=100, x=(W-sz)/2;
+    doc.addImage(canvas.toDataURL('image/png'),'PNG',x,45,sz,sz);
+    doc.setFontSize(10); doc.setFont('helvetica','normal'); doc.setTextColor(100,100,100);
+    doc.text(url, W/2, 158, {align:'center', maxWidth:W-30});
+    doc.save((title.replace(/[^a-zA-Z0-9 ]/g,'_')||'qrkod')+'_QR.pdf');
+  }
+  function load(cb){
+    if(typeof jsPDF!=='undefined'){cb(jsPDF);return;}
+    if(window.jspdf){cb(window.jspdf.jsPDF);return;}
+    var s=document.createElement('script');
+    s.src='https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js';
+    s.onload=function(){cb(window.jspdf?window.jspdf.jsPDF:jsPDF);};
+    document.head.appendChild(s);
+  }
+  load(build);
+}
+
 </script>
+
+
+<div id="link-spinner"><div class="sp-ring"></div></div>
+<div id="qr-modal">
+  <div class="qr-box">
+    <div class="qr-heading" id="qr-h"></div>
+    <div class="qr-url" id="qr-u"></div>
+    <canvas id="qr-canvas" width="200" height="200"></canvas><br>
+    <button class="qr-dl" onclick="dlQRpdf()">&#11015;&#65039; Ladda ner PDF</button>
+    <div id="qr-copied" style="font-size:12px;margin-bottom:10px;"></div>
+    <button class="qr-cl" onclick="document.getElementById('qr-modal').classList.remove('on')">Stäng</button>
+  </div>
+</div>
+</body>
+</html
 </body>
 </html>
