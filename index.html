@@ -387,7 +387,18 @@ async function createLink(){
     await uploadFile(base+".html",btoa(unescape(encodeURIComponent(sharedHtml))),repo);
     var url="https://sukrutaraj.github.io/digital-aktivitets-val/"+base+".html";
     var copied=false;
-    try{await navigator.clipboard.writeText(url);copied=true;}catch(e){}
+    try{
+      await navigator.clipboard.writeText(url);
+      copied=true;
+    }catch(e){
+      try{
+        var ta=document.createElement("textarea");
+        ta.value=url; ta.style.position="fixed"; ta.style.opacity="0";
+        document.body.appendChild(ta); ta.focus(); ta.select();
+        copied=document.execCommand("copy");
+        document.body.removeChild(ta);
+      }catch(e2){}
+    }
     document.getElementById('link-spinner').classList.remove('on');
     document.getElementById('qr-copied').textContent = copied ? '✔ Länken är kopierad till urklipp' : '⚠️ Kopiera länken manuellt';
     document.getElementById('qr-copied').style.color = copied ? '#4CAF50' : '#e67e22';
